@@ -300,7 +300,7 @@ def run_instances(
         run_id (str): Run ID
         timeout (int): Timeout for running tests
     """
-    client = docker.from_env()
+    client = docker.from_env(timeout=600)
     test_specs = list(
         map(
             lambda instance: make_test_spec(
@@ -532,7 +532,7 @@ def main(
     # run instances locally
     if platform.system() == "Linux":
         resource.setrlimit(resource.RLIMIT_NOFILE, (open_file_limit, open_file_limit))
-    client = docker.from_env()
+    client = docker.from_env(timeout=600)
 
     existing_images = list_images(client)
     if not dataset:

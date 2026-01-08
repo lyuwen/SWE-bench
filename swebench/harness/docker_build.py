@@ -23,6 +23,8 @@ from swebench.harness.test_spec.test_spec import (
 )
 from swebench.harness.utils import ansi_escape, run_threadpool
 
+# DRY_RUN = True
+DRY_RUN = False
 
 class BuildImageError(Exception):
     def __init__(self, image_name, message, logger):
@@ -124,31 +126,34 @@ def build_image(
         logger.info(
             f"Building docker image {image_name} in {build_dir} with platform {platform}"
         )
-        response = client.api.build(
-            path=str(build_dir),
-            tag=image_name,
-            rm=True,
-            forcerm=True,
-            decode=True,
-            platform=platform,
-            nocache=nocache,
-        )
+        if DRY_RUN:
+            print("Dry run, skip build.")
+        else:
+            response = client.api.build(
+                path=str(build_dir),
+                tag=image_name,
+                rm=True,
+                forcerm=True,
+                decode=True,
+                platform=platform,
+                nocache=nocache,
+            )
 
-        # Log the build process continuously
-        buildlog = ""
-        for chunk in response:
-            if "stream" in chunk:
-                # Remove ANSI escape sequences from the log
-                chunk_stream = ansi_escape(chunk["stream"])
-                logger.info(chunk_stream.strip())
-                buildlog += chunk_stream
-            elif "errorDetail" in chunk:
-                # Decode error message, raise BuildError
-                logger.error(f"Error: {ansi_escape(chunk['errorDetail']['message'])}")
-                raise docker.errors.BuildError(
-                    chunk["errorDetail"]["message"], buildlog
-                )
-        logger.info("Image built successfully!")
+            # Log the build process continuously
+            buildlog = ""
+            for chunk in response:
+                if "stream" in chunk:
+                    # Remove ANSI escape sequences from the log
+                    chunk_stream = ansi_escape(chunk["stream"])
+                    logger.info(chunk_stream.strip())
+                    buildlog += chunk_stream
+                elif "errorDetail" in chunk:
+                    # Decode error message, raise BuildError
+                    logger.error(f"Error: {ansi_escape(chunk['errorDetail']['message'])}")
+                    raise docker.errors.BuildError(
+                        chunk["errorDetail"]["message"], buildlog
+                    )
+            logger.info("Image built successfully!")
     except docker.errors.BuildError as e:
         logger.error(f"docker.errors.BuildError during {image_name}: {e}")
         raise BuildImageError(image_name, str(e), logger) from e
@@ -512,10 +517,17 @@ def build_container(
         # Define arguments for running the container
         run_args = test_spec.docker_specs.get("run_args", {})
         cap_add = run_args.get("cap_add", [])
+        container_name = test_spec.get_instance_container_name(run_id)
+
+        try:
+            old_container = client.containers.get(container_name)
+            cleanup_container(client, old_container, logger)
+        except docker.errors.NotFound:
+            pass
 
         container = client.containers.create(
             image=test_spec.instance_image_key,
-            name=test_spec.get_instance_container_name(run_id),
+            name=container_name,
             user=DOCKER_USER,
             detach=True,
             command="tail -f /dev/null",

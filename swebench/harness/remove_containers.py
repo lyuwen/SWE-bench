@@ -23,9 +23,14 @@ def main(instance_ids, predictions_path):
         print("No instance IDs provided, exiting.")
         return
 
+    try:
+        client = docker.from_env(timeout=600)
+    except Exception as e:
+        print(f"Error creating Docker client: {e}")
+        return
+
     for instance_id in all_ids:
         try:
-            client = docker.from_env()
             container = client.containers.get(f"sweb.eval.{instance_id}")
             container.stop()
             container.remove()

@@ -35,6 +35,7 @@ RUN adduser --disabled-password --gecos 'dog' nonroot
 _DOCKERFILE_ENV_PY = r"""FROM --platform={platform} {base_image_key}
 
 COPY ./setup_env.sh /root/
+RUN conda config --set channel_priority disabled
 RUN sed -i -e 's/\r$//' /root/setup_env.sh
 RUN chmod +x /root/setup_env.sh
 RUN /bin/bash -c "source ~/.bashrc && /root/setup_env.sh"

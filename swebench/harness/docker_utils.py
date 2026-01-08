@@ -186,10 +186,11 @@ def exec_run_with_timeout(container, cmd, timeout: int | None = 60):
     exec_id = None
     exception = None
     timed_out = False
+    exec_stream = None
 
     # Wrapper function to run the command
     def run_command():
-        nonlocal exec_result, exec_id, exception
+        nonlocal exec_result, exec_id, exception, exec_stream
         try:
             exec_id = container.client.api.exec_create(container.id, cmd)["Id"]
             exec_stream = container.client.api.exec_start(exec_id, stream=True)
@@ -212,6 +213,8 @@ def exec_run_with_timeout(container, cmd, timeout: int | None = 60):
         if exec_id is not None:
             exec_pid = container.client.api.exec_inspect(exec_id)["Pid"]
             container.exec_run(f"kill -TERM {exec_pid}", detach=True)
+        if exec_stream:
+            exec_stream.close()
         timed_out = True
     end_time = time.time()
     return exec_result.decode(), timed_out, end_time - start_time
