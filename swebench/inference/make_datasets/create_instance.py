@@ -14,6 +14,8 @@ from swebench.inference.make_datasets.utils import (
     ingest_directory_contents,
 )
 
+__base__ = os.path.dirname(os.path.abspath(__file__))
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -256,6 +258,16 @@ def prompt_style_3(instance):
     return final_text
 
 
+def prompt_style_4(instance):
+    with open(f"{__base__}/nemocascade-prompt-template-python.txt", "r") as f:
+        template = f.read()
+    # readmes_text = make_code_text(instance["readmes"])
+    code_text = make_code_text(instance["file_contents"])
+    problem_statement = instance["problem_statement"]
+    final_text = template.format(problem_statement=problem_statement, content=code_text)
+    return final_text
+
+
 def full_file_gen(instance):
     premise = "You will be provided with a partial code base and an issue statement explaining a problem to resolve."
     readmes_text = make_code_text(instance["readmes"], add_line_numbers=False)
@@ -296,6 +308,7 @@ def ingest_files(filenames):
 PROMPT_FUNCTIONS = {
     "style-2": prompt_style_2,
     "style-3": prompt_style_3,
+    "style-4": prompt_style_4,
     "full_file_gen": full_file_gen,
     "style-2-edits-only": prompt_style_2_edits_only,
 }
