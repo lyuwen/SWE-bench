@@ -172,6 +172,21 @@ def run_instance(
                 user=DOCKER_USER,
             )
             if val.exit_code == 0:
+                if "patch" in git_apply_cmd:
+                    check_orig = container.exec_run(
+                        f"find {DOCKER_WORKDIR} -name '*.orig' -type f | head -1",
+                        workdir=DOCKER_WORKDIR,
+                        user=DOCKER_USER,
+                    )
+                    if check_orig.output.decode(UTF8).strip():
+                        # Restore .orig files
+                        restore_val = container.exec_run(
+                            f"find {DOCKER_WORKDIR} -name '*.orig' -exec sh -c 'mv \"$1\" \"${{1%.orig}}\"' _ {{}} \\;",
+                            workdir=DOCKER_WORKDIR,
+                            user=DOCKER_USER,
+                        )
+                        if restore_val.exit_code == 0:
+                            logger.info("Detected reverse patch, restored files from .orig and treating as already applied")
                 logger.info(f"{APPLY_PATCH_PASS}:\n{val.output.decode(UTF8)}")
                 applied_patch = True
                 break
