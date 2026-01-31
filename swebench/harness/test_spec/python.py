@@ -411,7 +411,7 @@ def make_eval_script_list_py(
     HEREDOC_DELIMITER = "EOF_114329324912"
     test_files = get_modified_files(test_patch)
     # Reset test files to the state they should be in before the patch.
-    reset_tests_command = f"git checkout {base_commit} {' '.join(test_files)}"
+    reset_tests_command = f'for f in {" ".join(test_files)}; do git checkout {base_commit} -- "$f" || true; done'
     apply_test_patch_command = (
         f"git apply -v - <<'{HEREDOC_DELIMITER}'\n{test_patch}\n{HEREDOC_DELIMITER}"
     )

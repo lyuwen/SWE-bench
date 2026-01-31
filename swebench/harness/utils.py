@@ -337,8 +337,7 @@ def get_modified_files(patch: str) -> list[str]:
     """
     source_files = []
     for file in PatchSet(patch):
-        if file.source_file != "/dev/null":
-            source_files.append(file.source_file)
+        source_files.append(file.source_file)
     source_files = [x[2:] for x in source_files if x.startswith("a/")]
     return source_files
 
