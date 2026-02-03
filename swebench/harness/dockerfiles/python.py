@@ -30,6 +30,11 @@ RUN conda init --all
 RUN conda config --append channels conda-forge
 
 RUN adduser --disabled-password --gecos 'dog' nonroot
+
+RUN conda install -n base -y conda-libmamba-solver \
+ && conda config --set solver libmamba \
+ && conda config --set channel_priority disabled
+
 """
 
 _DOCKERFILE_ENV_PY = r"""FROM --platform={platform} {base_image_key}
