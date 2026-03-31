@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 
 from dataclasses import dataclass
 from typing import Any, Optional, Union, cast
@@ -23,6 +24,30 @@ from swebench.harness.test_spec.create_scripts import (
     make_eval_script_list,
 )
 
+# Environment variable for custom docker registry URL (replaces default "docker.io")
+DOCKER_REGISTRY_ENV = "DOCKER_REGISTRY"
+
+# Dataset columns to check (in priority order) for custom docker image names
+DOCKER_IMAGE_COLUMNS = ("docker_image", "base_image", "image_name")
+
+
+def _apply_registry(image_name: str) -> str:
+    """Prepend a custom registry URL from DOCKER_REGISTRY env var if set.
+
+    If the image already contains a '/' indicating a registry/namespace prefix,
+    the registry is prepended before the first segment. If DOCKER_REGISTRY is
+    not set, the image name is returned unchanged.
+    """
+    registry = os.environ.get(DOCKER_REGISTRY_ENV)
+    if not registry:
+        return image_name
+    # Strip trailing slash from registry
+    registry = registry.rstrip("/")
+    # If image already starts with the registry, return as-is
+    if image_name.startswith(f"{registry}/"):
+        return image_name
+    return f"{registry}/{image_name}"
+
 
 @dataclass
 class TestSpec:
@@ -45,6 +70,7 @@ class TestSpec:
     base_image_tag: str = LATEST
     env_image_tag: str = LATEST
     instance_image_tag: str = LATEST
+    custom_image_name: Optional[str] = None
 
     @property
     def setup_env_script(self):
@@ -105,14 +131,17 @@ class TestSpec:
 
     @property
     def instance_image_key(self):
+        if self.custom_image_name is not None:
+            return _apply_registry(self.custom_image_name)
         key = f"sweb.eval.{self.arch}.{self.instance_id.lower()}:{self.instance_image_tag}"
-        if self.is_remote_image:
+        if self.namespace is not None:
             key = f"{self.namespace}/{key}".replace("__", "_1776_")
+            key = _apply_registry(key)
         return key
 
     @property
     def is_remote_image(self):
-        return self.namespace is not None
+        return self.namespace is not None or self.custom_image_name is not None
 
     def get_instance_container_name(self, run_id=None):
         if not run_id:
@@ -157,6 +186,7 @@ def get_test_specs_from_dataset(
     namespace: Optional[str] = None,
     instance_image_tag: str = LATEST,
     env_image_tag: str = LATEST,
+    image_naming_pattern: str = "swebench",
 ) -> list[TestSpec]:
     """
     Idempotent function that converts a list of SWEbenchInstance objects to a list of TestSpec objects.
@@ -165,7 +195,13 @@ def get_test_specs_from_dataset(
         return cast(list[TestSpec], dataset)
     return list(
         map(
-            lambda x: make_test_spec(x, namespace, instance_image_tag, env_image_tag),
+            lambda x: make_test_spec(
+                x,
+                namespace,
+                instance_image_tag,
+                env_image_tag,
+                image_naming_pattern=image_naming_pattern,
+            ),
             cast(list[SWEbenchInstance], dataset),
         )
     )
@@ -178,6 +214,7 @@ def make_test_spec(
     env_image_tag: str = LATEST,
     instance_image_tag: str = LATEST,
     arch: str = "x86_64",
+    image_naming_pattern: str = "swebench",
 ) -> TestSpec:
     if isinstance(instance, TestSpec):
         return instance
@@ -191,6 +228,22 @@ def make_test_spec(
     problem_statement = instance.get("problem_statement")
     hints_text = instance.get("hints_text")  # Unused
     test_patch = instance["test_patch"]
+
+    # Detect custom docker image from dataset columns
+    custom_image_name = None
+    for col in DOCKER_IMAGE_COLUMNS:
+        val = instance.get(col)  # type: ignore[arg-type]
+        if val:
+            custom_image_name = val
+            break
+
+    # If no explicit image column but swesmith pattern requested, generate it
+    if custom_image_name is None and image_naming_pattern == "swesmith":
+        owner, repo_name = repo.split("/")
+        custom_image_name = (
+            f"{namespace or 'swebench'}/swesmith.{arch}"
+            f".{owner}_1776_{repo_name}.{base_commit[:8]}"
+        ).lower()
 
     def _from_json_or_obj(key: str) -> Any:
         """If key points to string, load with json"""
@@ -232,4 +285,5 @@ def make_test_spec(
         base_image_tag=base_image_tag,
         env_image_tag=env_image_tag,
         instance_image_tag=instance_image_tag,
+        custom_image_name=custom_image_name,
     )

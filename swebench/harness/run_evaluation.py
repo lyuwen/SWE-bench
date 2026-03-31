@@ -301,6 +301,7 @@ def run_instances(
     instance_image_tag: str = "latest",
     env_image_tag: str = "latest",
     rewrite_reports: bool = False,
+    image_naming_pattern: str = "swebench",
 ):
     """
     Run all instances for the given predictions in parallel.
@@ -323,6 +324,7 @@ def run_instances(
                 namespace=namespace,
                 instance_image_tag=instance_image_tag,
                 env_image_tag=env_image_tag,
+                image_naming_pattern=image_naming_pattern,
             ),
             instances,
         )
@@ -504,6 +506,7 @@ def main(
     instance_image_tag: str = "latest",
     env_image_tag: str = "latest",
     report_dir: str = ".",
+    image_naming_pattern: str = "swebench",
 ):
     """
     Run evaluation harness for the given dataset and predictions.
@@ -577,6 +580,7 @@ def main(
             instance_image_tag=instance_image_tag,
             env_image_tag=env_image_tag,
             rewrite_reports=rewrite_reports,
+            image_naming_pattern=image_naming_pattern,
         )
 
     # clean images + make final report
@@ -589,6 +593,7 @@ def main(
         namespace,
         instance_image_tag,
         env_image_tag,
+        image_naming_pattern=image_naming_pattern,
     )
 
 
@@ -683,6 +688,13 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--report_dir", type=str, default=".", help="Directory to write reports to"
+    )
+    parser.add_argument(
+        "--image_naming_pattern",
+        type=str,
+        choices=["swebench", "swesmith"],
+        default="swebench",
+        help="Image naming pattern: 'swebench' (default) or 'swesmith'",
     )
 
     # Modal execution args
