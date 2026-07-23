@@ -447,8 +447,12 @@ def make_httpbin_setup_commands() -> list:
         f"-k gevent httpbin:app > /dev/null 2>&1 &)",
         # Give the servers a moment to come up
         "sleep 2",
-        # Redirect httpbin.org to the local server
-        'echo "127.0.0.1    httpbin.org" >> /etc/hosts',
+        # Redirect httpbin.org to the local server. Also redirect www.google.co.uk,
+        # the off-host redirect target used by test_auth_is_stripped_on_redirect_off_host:
+        # the test only needs the target reachable and on a different host than
+        # httpbin.org (so that auth headers are stripped), which the local server
+        # satisfies without external internet egress.
+        'echo "127.0.0.1    httpbin.org www.google.co.uk" >> /etc/hosts',
     ]
 
 

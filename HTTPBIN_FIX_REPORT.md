@@ -24,14 +24,17 @@ The fix is applied only for `repo == "psf/requests"`; all other repos are unaffe
 | Setup | Resolved |
 |---|---|
 | debug-gym-style (pytest_httpbin cert + `REQUESTS_CA_BUNDLE`) | 4 / 8 |
-| **This fix (httpbin.org-SAN cert + vendored-bundle append)** | **7 / 8** |
+| + httpbin.org-SAN cert + vendored-bundle append | 7 / 8 |
+| **+ redirect `www.google.co.uk` to local httpbin** | **8 / 8** |
 
-The one remaining unresolved instance, `psf__requests-2317`, fails on a single
-PASS_TO_PASS test, `test_auth_is_stripped_on_redirect_off_host`, which issues a real
-request to `http://www.google.co.uk`. That test needs external internet egress the eval
-container does not have; it is unrelated to httpbin and no local-httpbin fix can address
-it. All FAIL_TO_PASS tests pass for all 8 instances, and every httpbin-dependent test
-passes.
+The last instance, `psf__requests-2317`, had one PASS_TO_PASS test,
+`test_auth_is_stripped_on_redirect_off_host`, that issues a redirect to
+`http://www.google.co.uk`. The test only requires the redirect target to be reachable
+and on a **different host** than `httpbin.org` (so `requests` strips the `Authorization`
+header). Pointing `www.google.co.uk` at the local httpbin via `/etc/hosts` satisfies
+both conditions without external internet egress — the test never inspects Google's
+response, so this remains a faithful check of the library's redirect behavior. With that
+entry added, all 8 instances resolve on gold patches.
 
 ## Where the change lives
 
@@ -59,7 +62,7 @@ cat /tmp/swebench_httpbin_certs/cert.pem >> "$(python -c "import requests; print
 (nohup gunicorn -b 127.0.0.1:80 -k gevent httpbin:app > /dev/null 2>&1 &)
 (nohup gunicorn -b 127.0.0.1:443 --certfile=/tmp/swebench_httpbin_certs/cert.pem --keyfile=/tmp/swebench_httpbin_certs/key.pem -k gevent httpbin:app > /dev/null 2>&1 &)
 sleep 2
-echo "127.0.0.1    httpbin.org" >> /etc/hosts
+echo "127.0.0.1    httpbin.org www.google.co.uk" >> /etc/hosts
 ```
 
 ## Why each line matters (this is the part to port into your inference logic)
@@ -120,11 +123,15 @@ the local server — but the server's certificate must be valid for the hostname
    Gives gunicorn time to bind before tests start; without a small wait, fast test
    startup can race the server bind.
 
-7. **`echo "127.0.0.1    httpbin.org" >> /etc/hosts`**
+7. **`echo "127.0.0.1    httpbin.org www.google.co.uk" >> /etc/hosts`**
    Redirects all `httpbin.org` traffic to the local server. Test code is unchanged; DNS
    resolution is what's diverted. Note the tests read `HTTPBIN_URL` (default
    `http://httpbin.org/`) but many also hard-code `https://httpbin.org`, so the hosts
    redirect (rather than setting `HTTPBIN_URL`) is what covers all cases.
+   `www.google.co.uk` is redirected to the same local server because
+   `test_auth_is_stripped_on_redirect_off_host` follows a redirect to that host; only
+   reachability and host-difference matter to the test (see the results table), so a
+   local endpoint suffices and no external egress is needed.
 
 ## Placement in the eval script
 
@@ -163,9 +170,10 @@ reset test files
   requests (vendored urllib3). If you port this to a newer requests that uses the
   external `certifi`, `requests.certs.where()` still resolves to certifi's bundle, so the
   same line works — but verify the path is writable.
-- **No control over external-egress tests**: a test that redirects to a real third-party
-  host (e.g. `test_auth_is_stripped_on_redirect_off_host` → `www.google.co.uk`) will
-  fail without outbound internet. This is orthogonal to the httpbin fix.
+- **Off-host redirect test**: `test_auth_is_stripped_on_redirect_off_host` follows a
+  redirect to `http://www.google.co.uk`. Rather than requiring outbound internet, we
+  redirect that host to the local httpbin too (it only needs to be reachable and on a
+  different host than `httpbin.org`). No external egress is required.
 
 ## Scope / safety
 
@@ -185,8 +193,9 @@ reset test files
   `hostname doesn't match`; vendored-bundle append → fixes `Session.send()`
   self-signed-cert failure).
 - Full harness run on gold patches for all 8 `psf__requests-*` instances:
-  **7/8 resolved, 0 errors**; the sole remaining failure is the external-egress test
-  described above. Run id `httpbin-gold-test2`.
+  **7/8 resolved, 0 errors** (run id `httpbin-gold-test2`). Adding the
+  `www.google.co.uk` redirect then resolved the last instance, `psf__requests-2317`,
+  for **8/8** (run id `httpbin-2317-check`).
 
 ## Reproduce
 
