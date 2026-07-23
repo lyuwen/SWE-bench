@@ -402,6 +402,41 @@ def make_env_script_list_py(instance, specs, env_name) -> list:
     return reqs_commands
 
 
+def make_httpbin_setup_commands(env_name) -> list:
+    """
+    Commands to stand up a local httpbin server so that psf/requests tests do
+    not depend on the public (and frequently unstable) httpbin.org service.
+
+    Mirrors the approach used by microsoft/debug-gym: install a pinned httpbin +
+    pytest-httpbin, launch gunicorn workers on ports 80 (HTTP) and 443 (HTTPS)
+    using the self-signed cert bundled with pytest_httpbin, and redirect
+    httpbin.org to 127.0.0.1 via /etc/hosts.
+    """
+    return [
+        # Pinned versions known to work together
+        "python -m pip install 'httpbin[mainapp]==0.10.2' 'pytest-httpbin==2.1.0'",
+        # Resolve the directory holding pytest_httpbin's bundled cert/key at runtime
+        'HTTPBIN_CERT_DIR=$(python -c "import os, pytest_httpbin; '
+        "print(os.path.join(os.path.dirname(pytest_httpbin.__file__), 'certs'))\")",
+        # Make the requests client trust pytest_httpbin's self-signed CA when it
+        # talks to the local HTTPS server. `python -m pytest_httpbin.certs` prints
+        # the client-side CA bundle path (distinct from the server cert/key below).
+        # requests reads REQUESTS_CA_BUNDLE first, then CURL_CA_BUNDLE; set both.
+        "export REQUESTS_CA_BUNDLE=$(python -m pytest_httpbin.certs)",
+        "export CURL_CA_BUNDLE=$REQUESTS_CA_BUNDLE",
+        # Launch HTTP + HTTPS servers detached (subshell exits after backgrounding)
+        "(nohup gunicorn -b 127.0.0.1:80 -k gevent httpbin:app > /dev/null 2>&1 &)",
+        "(nohup gunicorn -b 127.0.0.1:443 "
+        '--certfile="$HTTPBIN_CERT_DIR/server.pem" '
+        '--keyfile="$HTTPBIN_CERT_DIR/server.key" '
+        "-k gevent httpbin:app > /dev/null 2>&1 &)",
+        # Give the servers a moment to come up
+        "sleep 2",
+        # Redirect httpbin.org to the local server
+        'echo "127.0.0.1    httpbin.org" >> /etc/hosts',
+    ]
+
+
 def make_eval_script_list_py(
     instance, specs, env_name, repo_directory, base_commit, test_patch
 ) -> list:
@@ -442,6 +477,9 @@ def make_eval_script_list_py(
     ]
     if "install" in specs:
         eval_commands.append(specs["install"])
+    if instance["repo"] == "psf/requests":
+        # Stand up a local httpbin server to avoid depending on httpbin.org
+        eval_commands += make_httpbin_setup_commands(env_name)
     eval_commands += [
         reset_tests_command,
         apply_test_patch_command,
