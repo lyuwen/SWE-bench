@@ -33,6 +33,12 @@ DOCKER_REGISTRY_ENV = "DOCKER_REGISTRY"
 # "image_url" is first but validated as a Docker ref (must not contain "://").
 DOCKER_IMAGE_COLUMNS = ("image_url", "docker_image", "base_image", "image_name")
 
+EMPTY_PATCH = """\
+diff --git a/empty.txt b/empty.txt
+index e69de29..e69de29 100644
+--- a/empty.txt
++++ b/empty.txt"""
+
 
 def _apply_registry(image_name: str) -> str:
     """Prepend a custom registry URL from DOCKER_REGISTRY env var if set.
@@ -235,7 +241,7 @@ def make_test_spec(
     base_commit = instance["base_commit"]
     problem_statement = instance.get("problem_statement")
     hints_text = instance.get("hints_text")  # Unused
-    test_patch = instance["test_patch"]
+    test_patch = instance.get("test_patch", EMPTY_PATCH)
 
     # Detect custom docker image ref from dataset columns.
     # image_url is validated as a Docker ref (must not look like an HTTP URL).
@@ -309,7 +315,7 @@ def make_test_spec(
         arch=arch,
         FAIL_TO_PASS=fail_to_pass,
         PASS_TO_PASS=pass_to_pass,
-        language=MAP_REPO_TO_EXT[repo],
+        language=MAP_REPO_TO_EXT.get(repo, "python"),
         docker_specs=docker_specs,
         namespace=namespace,
         base_image_tag=base_image_tag,
