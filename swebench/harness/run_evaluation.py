@@ -301,6 +301,7 @@ def run_instances(
     instance_image_tag: str = "latest",
     env_image_tag: str = "latest",
     rewrite_reports: bool = False,
+    image_naming_pattern: str = "swebench",
 ):
     """
     Run all instances for the given predictions in parallel.
@@ -323,37 +324,59 @@ def run_instances(
                 namespace=namespace,
                 instance_image_tag=instance_image_tag,
                 env_image_tag=env_image_tag,
+                image_naming_pattern=image_naming_pattern,
             ),
             instances,
         )
     )
 
-    # print number of existing instance images
-    instance_image_ids = {x.instance_image_key for x in test_specs}
-    existing_images = {
-        tag
-        for i in client.images.list(all=True)
-        for tag in i.tags
-        if tag in instance_image_ids
-    }
-    if not force_rebuild and len(existing_images):
+    # Build one local-image set covering all specs — one client.images.list call.
+    # Only needed for non-dataset specs (cache reuse decisions).
+    # Dataset images are always pulled fresh and removed after the run.
+    non_dataset_specs = [x for x in test_specs if not x.is_dataset_image]
+    instance_image_ids = {x.instance_image_key for x in non_dataset_specs}
+    if instance_image_ids:
+        existing_images = {
+            tag
+            for i in client.images.list(all=True)
+            for tag in i.tags
+            if tag in instance_image_ids
+        }
+    else:
+        existing_images = set()
+    if not force_rebuild and existing_images:
         print(
             f"Found {len(existing_images)} existing instance images. Will reuse them."
         )
 
-    # run instances in parallel
+    # Dataset images are always pulled fresh (docker_build.py) and removed once
+    # after the threadpool finishes — deduplicated to avoid per-worker races when
+    # multiple instances share a tag.  Skip removal in rewrite_reports mode since
+    # no container (and therefore no pull) ever happens there.
+    dataset_image_tags: set[str] = set()
+    if not rewrite_reports:
+        dataset_image_tags = {
+            x.instance_image_key for x in test_specs if x.is_dataset_image
+        }
+
     payloads = []
     for test_spec in test_specs:
+        if test_spec.is_dataset_image:
+            # Worker must NOT remove the image — cleanup is done at run level
+            # after the threadpool to avoid races on shared tags.
+            rm_image = False
+        else:
+            rm_image = should_remove(
+                test_spec.instance_image_key,
+                cache_level,
+                clean,
+                existing_images,
+            )
         payloads.append(
             (
                 test_spec,
                 predictions[test_spec.instance_id],
-                should_remove(
-                    test_spec.instance_image_key,
-                    cache_level,
-                    clean,
-                    existing_images,
-                ),
+                rm_image,
                 force_rebuild,
                 client,
                 run_id,
@@ -383,6 +406,16 @@ def run_instances(
         return result
 
     run_threadpool(run_evaluation_with_progress, payloads, max_workers)
+
+    # Remove dataset images once after all workers finish — deduplicated to avoid
+    # per-worker races on shared tags, and skipped in rewrite_reports mode where
+    # no container (and therefore no pull) ever happens.
+    for tag in dataset_image_tags:
+        try:
+            remove_image(client, tag, "quiet")
+        except Exception as e:
+            print(f"Warning: could not remove dataset image {tag}: {e}")
+
     print("All instances run.")
 
 
@@ -504,6 +537,7 @@ def main(
     instance_image_tag: str = "latest",
     env_image_tag: str = "latest",
     report_dir: str = ".",
+    image_naming_pattern: str = "swebench",
 ):
     """
     Run evaluation harness for the given dataset and predictions.
@@ -555,15 +589,28 @@ def main(
     else:
         # build environment images + run instances
         if namespace is None and not rewrite_reports:
-            build_env_images(
-                client,
-                dataset,
-                force_rebuild,
-                max_workers,
-                namespace,
-                instance_image_tag,
-                env_image_tag,
-            )
+            # Filter out dataset-image specs — they use a pre-built image pulled
+            # at evaluation time and have no local base/env images to build.
+            local_dataset = [
+                i for i in dataset
+                if not make_test_spec(
+                    i,
+                    namespace=namespace,
+                    instance_image_tag=instance_image_tag,
+                    env_image_tag=env_image_tag,
+                    image_naming_pattern=image_naming_pattern,
+                ).is_dataset_image
+            ]
+            if local_dataset:
+                build_env_images(
+                    client,
+                    local_dataset,
+                    force_rebuild,
+                    max_workers,
+                    namespace,
+                    instance_image_tag,
+                    env_image_tag,
+                )
         run_instances(
             predictions,
             dataset,
@@ -577,6 +624,7 @@ def main(
             instance_image_tag=instance_image_tag,
             env_image_tag=env_image_tag,
             rewrite_reports=rewrite_reports,
+            image_naming_pattern=image_naming_pattern,
         )
 
     # clean images + make final report
@@ -589,6 +637,7 @@ def main(
         namespace,
         instance_image_tag,
         env_image_tag,
+        image_naming_pattern=image_naming_pattern,
     )
 
 
@@ -683,6 +732,13 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--report_dir", type=str, default=".", help="Directory to write reports to"
+    )
+    parser.add_argument(
+        "--image_naming_pattern",
+        type=str,
+        choices=["swebench", "swesmith"],
+        default="swebench",
+        help="Image naming pattern: 'swebench' (default) or 'swesmith'",
     )
 
     # Modal execution args

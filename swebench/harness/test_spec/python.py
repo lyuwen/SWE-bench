@@ -402,6 +402,60 @@ def make_env_script_list_py(instance, specs, env_name) -> list:
     return reqs_commands
 
 
+def make_httpbin_setup_commands() -> list:
+    """
+    Commands to stand up a local httpbin server so that psf/requests tests do
+    not depend on the public (and frequently unstable) httpbin.org service.
+
+    The psf/requests test suite reaches httpbin at (by default)
+    ``http(s)://httpbin.org``, so we redirect that host to a local httpbin
+    server via /etc/hosts. Serving HTTPS requires a certificate that is valid
+    for the hostname ``httpbin.org``:
+
+    - pytest_httpbin's bundled cert is issued for localhost/127.0.0.1 only, so
+      reusing it fails hostname verification ("hostname 'httpbin.org' doesn't
+      match ..."). We therefore generate a self-signed cert with
+      ``subjectAltName=DNS:httpbin.org`` instead.
+    - The client must trust that cert. ``REQUESTS_CA_BUNDLE`` covers requests
+      that go through ``Session.request`` (which merges environment settings),
+      but tests that call ``Session.send`` directly bypass the env var and fall
+      back to requests' bundled CA file. We therefore ALSO append the cert to
+      ``requests.certs.where()``.
+
+    This is a hardened version of the approach used by microsoft/debug-gym.
+    """
+    cert_dir = "/tmp/swebench_httpbin_certs"
+    return [
+        # Pinned versions known to work together
+        "python -m pip install 'httpbin[mainapp]==0.10.2' 'pytest-httpbin==2.1.0'",
+        # Generate a self-signed cert valid for the httpbin.org hostname
+        f"mkdir -p {cert_dir}",
+        f"openssl req -x509 -newkey rsa:2048 -nodes "
+        f"-keyout {cert_dir}/key.pem -out {cert_dir}/cert.pem -days 3650 "
+        f"-subj '/CN=httpbin.org' "
+        f"-addext 'subjectAltName=DNS:httpbin.org,DNS:localhost,IP:127.0.0.1'",
+        # Trust the cert for requests that merge environment settings
+        f"export REQUESTS_CA_BUNDLE={cert_dir}/cert.pem",
+        f"export CURL_CA_BUNDLE={cert_dir}/cert.pem",
+        # Also append it to requests' bundled CA file, which Session.send() uses
+        # directly (it does not consult REQUESTS_CA_BUNDLE)
+        f'cat {cert_dir}/cert.pem >> "$(python -c "import requests; print(requests.certs.where())")"',
+        # Launch HTTP + HTTPS servers detached (subshell exits after backgrounding)
+        "(nohup gunicorn -b 127.0.0.1:80 -k gevent httpbin:app > /dev/null 2>&1 &)",
+        f"(nohup gunicorn -b 127.0.0.1:443 "
+        f"--certfile={cert_dir}/cert.pem --keyfile={cert_dir}/key.pem "
+        f"-k gevent httpbin:app > /dev/null 2>&1 &)",
+        # Give the servers a moment to come up
+        "sleep 2",
+        # Redirect httpbin.org to the local server. Also redirect www.google.co.uk,
+        # the off-host redirect target used by test_auth_is_stripped_on_redirect_off_host:
+        # the test only needs the target reachable and on a different host than
+        # httpbin.org (so that auth headers are stripped), which the local server
+        # satisfies without external internet egress.
+        'echo "127.0.0.1    httpbin.org www.google.co.uk" >> /etc/hosts',
+    ]
+
+
 def make_eval_script_list_py(
     instance, specs, env_name, repo_directory, base_commit, test_patch
 ) -> list:
@@ -442,6 +496,9 @@ def make_eval_script_list_py(
     ]
     if "install" in specs:
         eval_commands.append(specs["install"])
+    if instance["repo"] == "psf/requests":
+        # Stand up a local httpbin server to avoid depending on httpbin.org
+        eval_commands += make_httpbin_setup_commands()
     eval_commands += [
         reset_tests_command,
         apply_test_patch_command,
