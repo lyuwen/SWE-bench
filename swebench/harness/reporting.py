@@ -1,4 +1,5 @@
 import docker
+import docker.errors
 import json
 from pathlib import Path
 from typing import Optional
@@ -108,8 +109,13 @@ def make_run_report(
                 unremoved_images.add(image_name)
         containers = client.containers.list(all=True)
         for container in containers:
-            if run_id in container.name:
-                unstopped_containers.add(container.name)
+            try:
+                name = container.name
+                if name and run_id in name:
+                    unstopped_containers.add(name)
+            except docker.errors.NotFound:
+                # Container was removed between list and inspect — skip it.
+                pass
 
     # print final report
     dataset_ids = {i[KEY_INSTANCE_ID] for i in full_dataset}
