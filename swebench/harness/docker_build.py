@@ -497,17 +497,27 @@ def build_container(
     if not test_spec.is_remote_image:
         build_instance_image(test_spec, client, logger, nocache)
     else:
-        try:
-            client.images.get(test_spec.instance_image_key)
-        except docker.errors.ImageNotFound:
+        # Dataset images (image_url / docker_image / …) are always pulled fresh
+        # so stale cached copies are never evaluated.  Namespace and swesmith
+        # images check the local cache first and pull only on a miss (they are
+        # reused across instances and reruns).
+        need_pull = test_spec.is_dataset_image
+        if not need_pull:
+            try:
+                client.images.get(test_spec.instance_image_key)
+            except docker.errors.ImageNotFound:
+                need_pull = True
+        if need_pull:
             try:
                 client.images.pull(test_spec.instance_image_key)
             except docker.errors.NotFound as e:
                 raise BuildImageError(test_spec.instance_id, str(e), logger) from e
             except Exception as e:
-                raise Exception(
-                    f"Error occurred while pulling image {test_spec.base_image_key}: {str(e)}"
-                )
+                raise BuildImageError(
+                    test_spec.instance_id,
+                    f"Error pulling image {test_spec.instance_image_key}: {str(e)}",
+                    logger,
+                ) from e
 
     container = None
     try:

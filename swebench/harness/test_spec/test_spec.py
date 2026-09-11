@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 import os
 
 from dataclasses import dataclass
@@ -28,7 +29,9 @@ from swebench.harness.test_spec.create_scripts import (
 DOCKER_REGISTRY_ENV = "DOCKER_REGISTRY"
 
 # Dataset columns to check (in priority order) for custom docker image names
-DOCKER_IMAGE_COLUMNS = ("docker_image", "base_image", "image_name")
+# Dataset columns checked (in priority order) for custom docker image refs/URLs.
+# "image_url" is first but validated as a Docker ref (must not contain "://").
+DOCKER_IMAGE_COLUMNS = ("image_url", "docker_image", "base_image", "image_name")
 
 
 def _apply_registry(image_name: str) -> str:
@@ -71,6 +74,11 @@ class TestSpec:
     env_image_tag: str = LATEST
     instance_image_tag: str = LATEST
     custom_image_name: Optional[str] = None
+    # True when custom_image_name came from a dataset column (image_url, docker_image,
+    # etc.), meaning the image should be pulled fresh and removed after evaluation.
+    # False for images derived from --image_naming_pattern swesmith, which are reused
+    # across instances and should not be auto-removed.
+    is_dataset_image: bool = False
 
     @property
     def setup_env_script(self):
@@ -229,15 +237,37 @@ def make_test_spec(
     hints_text = instance.get("hints_text")  # Unused
     test_patch = instance["test_patch"]
 
-    # Detect custom docker image from dataset columns
+    # Detect custom docker image ref from dataset columns.
+    # image_url is validated as a Docker ref (must not look like an HTTP URL).
     custom_image_name = None
+    is_dataset_image = False
+    invalid_col: tuple[str, object] | None = None  # first invalid-but-present column
     for col in DOCKER_IMAGE_COLUMNS:
         val = instance.get(col)  # type: ignore[arg-type]
-        if val:
-            custom_image_name = val
-            break
+        if not val:
+            continue
+        if not isinstance(val, str) or "://" in val:
+            # Record the first bad column for a clear error if no valid one is found.
+            if invalid_col is None:
+                invalid_col = (col, val)
+            continue
+        custom_image_name = val
+        is_dataset_image = True
+        break
 
-    # If no explicit image column but swesmith pattern requested, generate it
+    # If every non-empty image column was invalid, fail clearly rather than
+    # silently evaluating against an unrelated locally-built image.
+    if not is_dataset_image and invalid_col is not None:
+        bad_col, bad_val = invalid_col
+        raise ValueError(
+            f"Instance '{instance_id}': column '{bad_col}' value {bad_val!r} is not "
+            "a valid Docker image reference (expected a plain string without a URL "
+            "scheme such as 'https://') and no other image column provided a valid "
+            "reference. Correct the dataset entry."
+        )
+
+    # If no explicit image column but swesmith pattern requested, generate it.
+    # These images are not pulled fresh per-instance; they are reused across runs.
     if custom_image_name is None and image_naming_pattern == "swesmith":
         owner, repo_name = repo.split("/")
         custom_image_name = (
@@ -286,4 +316,5 @@ def make_test_spec(
         env_image_tag=env_image_tag,
         instance_image_tag=instance_image_tag,
         custom_image_name=custom_image_name,
+        is_dataset_image=is_dataset_image,
     )
