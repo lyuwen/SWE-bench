@@ -107,9 +107,10 @@ def make_run_report(
             image_name = spec.instance_image_key
             if image_name in images:
                 unremoved_images.add(image_name)
-        containers = client.containers.list(all=True)
-        for container in containers:
+        container_list = client.api.containers(all=True)
+        for container_dict in container_list:
             try:
+                container = client.containers.get(container_dict['Id'])
                 name = container.name
                 if name and run_id in name:
                     unstopped_containers.add(name)
